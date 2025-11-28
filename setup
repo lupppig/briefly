@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+POSTGRES_CONTAINER="local-postgres"
+POSTGRES_IMAGE="postgres:16"
+POSTGRES_PORT=5432
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-brief_password}"
+POSTGRES_USER="${POSTGRES_USER:-brief_user}"
+POSTGRES_DB="${POSTGRES_DB:-brief_db}"
+
+MINIO_CONTAINER="local-minio"
+MINIO_IMAGE="minio/minio:latest"
+MINIO_PORT_API=9000
+MINIO_PORT_CONSOLE=9001
+MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
+
+container_exists() {
+    docker ps -a --format '{{.Names}}' | grep -wq "$1"
+}
+
+start_or_create_postgres() {
+    if container_exists "$POSTGRES_CONTAINER"; then
+        echo "[+] Postgres container exists — starting..."
+        docker start "$POSTGRES_CONTAINER"
+    else
+        echo "[+] Creating Postgres container..."
+        docker pull "$POSTGRES_IMAGE"
+
+        docker run -d \
+            --name "$POSTGRES_CONTAINER" \
+            -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            -e POSTGRES_USER="$POSTGRES_USER" \
+            -e POSTGRES_DB="$POSTGRES_DB" \
+            -p "$POSTGRES_PORT":5432 \
+            -v pgdata:/var/lib/postgresql/data \
+            "$POSTGRES_IMAGE"
+    fi
+
+    # Wait for Postgres to be ready
+    echo "[+] Waiting for Postgres to accept connections..."
+    until docker exec -i "$POSTGRES_CONTAINER" pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" > /dev/null 2>&1; do
+        sleep 1
+    done
+    echo "[+] Postgres is ready!"
+}
+
+start_or_create_minio() {
+    if container_exists "$MINIO_CONTAINER"; then
+        echo "[+] MinIO container exists — starting..."
+        docker start "$MINIO_CONTAINER"
+    else
+        echo "[+] Creating MinIO container..."
+        docker pull "$MINIO_IMAGE"
+
+        docker run -d \
+            --name "$MINIO_CONTAINER" \
+            -p "$MINIO_PORT_API":9000 \
+            -p "$MINIO_PORT_CONSOLE":9001 \
+            -e MINIO_ROOT_USER="$MINIO_ROOT_USER" \
+            -e MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
+            -v minio-data:/data \
+            "$MINIO_IMAGE" server /data --console-address ":9001"
+    fi
+}
+
+echo "===== Starting Local Services ====="
+start_or_create_postgres
+start_or_create_minio
+echo "===== All Services Ready ====="
