@@ -44,14 +44,15 @@ func main() {
 	}
 	h := handlers.BriefHandler{Db: db, Mclient: mc}
 
-	r.HandleFunc("/brief-youtube", h.PostYoutube)
-	r.HandleFunc("/brief-doc", h.PostAudioDoc)
+	r.HandleFunc("/api/youtube", h.PostYoutube)
+	r.HandleFunc("/api/file", h.PostAudioDoc)
+	r.HandleFunc("/api/youtube/{job_id}", h.GetYoutubeJobStatus)
 
 	srv := &http.Server{
 		Handler:      r,
 		Addr:         fmt.Sprintf(":%s", port),
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second * 2,
+		ReadTimeout:  30 * time.Second * 2,
 	}
 
 	log.Printf("Server port started on: %v", port)

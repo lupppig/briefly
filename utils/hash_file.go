@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"io"
 	"mime/multipart"
+
+	"github.com/google/uuid"
 )
 
 func HashFile(file multipart.File) (string, error) {
@@ -26,4 +28,8 @@ func HashFile(file multipart.File) (string, error) {
 	}
 
 	return hash, nil
+}
+
+func NewJobID() string {
+	return uuid.NewString()
 }

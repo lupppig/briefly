@@ -1,13 +1,13 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"github.com/lupppig/briefly/db/mini"
 	db "github.com/lupppig/briefly/db/postgres"
 	"github.com/lupppig/briefly/service"
@@ -25,30 +25,38 @@ func (b *BriefHandler) PostYoutube(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Println(err.Error())
-		utils.FerrorResponse(w, http.StatusBadRequest, "bad response", err.Error())
+		utils.FerrorResponse(w, http.StatusBadRequest, "invalid request body", err.Error())
 		return
 	}
 
-	videoID, err := utils.ValidateYouTubeURL(req.Link)
+	if _, err := utils.ValidateYouTubeURL(req.Link); err != nil {
+		utils.FerrorResponse(w, http.StatusBadRequest, "invalid YouTube link", err.Error())
+		return
+	}
+
+	jobID := utils.NewJobID()
+
+	go processYoutubeJob(jobID, req.Link, b.Db, b.Mclient)
+	utils.JSONResponse(w, http.StatusAccepted, "youtube processing queued", map[string]string{"job_id": jobID})
+
+}
+
+func (b *BriefHandler) GetYoutubeJobStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	jobID, err := uuid.Parse(vars["job_id"])
 	if err != nil {
-		utils.FerrorResponse(w, http.StatusBadRequest, "bad response", err.Error())
+		utils.FerrorResponse(w, http.StatusBadRequest, "invalid job id", err.Error())
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	serv := service.Service{Db: b.Db}
-
-	err = serv.YoututbeService(ctx, req.Link, videoID)
-
+	serv := service.Service{Db: b.Db, Mc: b.Mclient}
+	job, err := serv.GetYoutubeStatus(jobID.String())
 	if err != nil {
-		log.Println(err.Error())
-		utils.InternalServerResponse(w)
+		utils.FerrorResponse(w, http.StatusNotFound, "job not found", err.Error())
 		return
 	}
-	utils.JSONResponse(w, http.StatusOK, "youtube link seen", videoID)
+
+	utils.JSONResponse(w, http.StatusOK, "job status", job)
 }
 
 func (b *BriefHandler) PostAudioDoc(w http.ResponseWriter, r *http.Request) {
