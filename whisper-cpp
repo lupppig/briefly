@@ -1,0 +1,17 @@
+#!/usr/bin/sh
+
+if [ "$0" = "$BASH_SOURCE" ]; then
+  echo "❌ Don't run this script. Use: source whisper_env.sh"
+  exit 1
+fi
+
+export CGO_ENABLED=1
+export LD_LIBRARY_PATH="/home/klein/Documents/dev/whisper.cpp/build/src:/home/klein/Documents/dev/whisper.cpp/build/ggml/src:$LD_LIBRARY_PATH"
+export CGO_CPPFLAGS="-I/home/klein/Documents/dev/whisper.cpp/include -I/home/klein/Documents/dev/whisper.cpp/ggml/include"
+export CGO_LDFLAGS="\
+-L/home/klein/Documents/dev/whisper.cpp/build/src \
+-lwhisper \
+-L/home/klein/Documents/dev/whisper.cpp/build/ggml/src \
+-lggml -lggml-base -lggml-cpu \
+-lstdc++ -lm -lpthread"
+

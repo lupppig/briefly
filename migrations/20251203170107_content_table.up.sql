@@ -1,3 +1,5 @@
+
+
 CREATE TABLE uploaded_files (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
@@ -27,6 +29,3 @@ ON uploaded_files (original_name);
 
 CREATE INDEX idx_uploaded_files_created_at
 ON uploaded_files (created_at DESC);
-
-
-

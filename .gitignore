@@ -18,6 +18,7 @@ coverage.*
 profile.cov
 
 tmp/
+tmp_cache/
 # Dependency directories (remove the comment below to include it)
 # vendor/
 

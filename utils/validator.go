@@ -13,6 +13,7 @@ import (
 )
 
 var youtubeIDRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{11}$`)
+var playlistIDRegex = regexp.MustCompile(`^PL[a-zA-Z0-9_-]+$`)
 
 func ValidateYouTubeURL(link string) (string, error) {
 	if link == "" {
@@ -24,9 +25,20 @@ func ValidateYouTubeURL(link string) (string, error) {
 		return "", errors.New("invalid url")
 	}
 
+	q := u.Query()
+
+	if list := q.Get("list"); list != "" {
+		if playlistIDRegex.MatchString(list) || strings.HasPrefix(strings.ToUpper(list), "PL") {
+			return "", errors.New("playlist links are not supported — only single video links allowed")
+		}
+	}
+
+	if strings.Contains(u.Path, "/playlist") {
+		return "", errors.New("playlist links are not supported — only single video links allowed")
+	}
+
 	host := strings.ToLower(u.Host)
 
-	// youtu.be/<id>
 	if host == "youtu.be" {
 		id := strings.TrimPrefix(u.Path, "/")
 		if youtubeIDRegex.MatchString(id) {
@@ -36,7 +48,8 @@ func ValidateYouTubeURL(link string) (string, error) {
 	}
 
 	if strings.Contains(host, "youtube.com") {
-		if v := u.Query().Get("v"); v != "" && youtubeIDRegex.MatchString(v) {
+
+		if v := q.Get("v"); v != "" && youtubeIDRegex.MatchString(v) {
 			return v, nil
 		}
 
@@ -46,6 +59,7 @@ func ValidateYouTubeURL(link string) (string, error) {
 				return id, nil
 			}
 		}
+
 		return "", errors.New("invalid youtube video id")
 	}
 

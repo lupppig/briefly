@@ -1,219 +1,154 @@
 package service
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"log"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
-	"sync"
+	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/lupppig/briefly/db/mini"
-	db "github.com/lupppig/briefly/db/postgres"
+	"github.com/lupppig/briefly/utils"
 	"github.com/minio/minio-go/v7"
 )
 
-type Service struct {
-	Db *db.PostgresDB
-	Mc *mini.MinioClient
-}
+func (s *Service) ProcessYoutubeJob(jobID, link string) {
+	update := func(status string, summary interface{}, errMsg string) {
+		s.JobManager.UpdateJob(jobID, status, summary, errMsg)
+	}
 
-func (s *Service) GetYoutubeStatus(id string) (*db.YoutubeJob, error) {
-	return s.Db.GetYoutubeJobByID(context.Background(), id)
-}
+	defer func() {
+		if r := recover(); r != nil {
+			update("error", "", fmt.Sprintf("panic: %v", r))
+		}
+	}()
 
-func (s *Service) YoutubeService(ctx context.Context, playlistLink string) ([]*db.Youtube, error) {
-	objPaths, videoIDs, err := convertPlaylistConcurrently(ctx, playlistLink, s.Mc)
+	update("validating_url", "", "")
+	videoID, err := utils.ValidateYouTubeURL(link)
 	if err != nil {
-		return nil, err
+		update("error", "", err.Error())
+		return
 	}
 
-	var results []*db.Youtube
-	for i, objPath := range objPaths {
-		videoID := videoIDs[i]
+	ctx := context.Background()
+	update("checking_cache", "", "")
 
-		yt, err := s.Db.GetOrCreateYoutube(ctx, videoID, "", playlistLink)
-		if err != nil && err != pgx.ErrNoRows {
-			return nil, err
-		}
-
-		if yt.AudioPath == "" {
-			yt, err = s.Db.UpdateYoutubeAudioPath(ctx, videoID, objPath)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		results = append(results, yt)
-	}
-
-	return results, nil
-}
-
-func getPlaylistVideoLinks(playlistURL string) ([]string, error) {
-	cmd := exec.Command("yt-dlp", "-j", "--flat-playlist", playlistURL)
-	output, err := cmd.Output()
+	yt, err := s.Db.GetOrCreateYoutube(ctx, videoID, "", link)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list playlist videos: %w", err)
+		update("error", "", "failed db fetch")
+		return
 	}
 
-	var videoLinks []string
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		var info map[string]interface{}
-		if err := json.Unmarshal(scanner.Bytes(), &info); err != nil {
-			continue
-		}
-		if id, ok := info["id"].(string); ok {
-			videoLinks = append(videoLinks, "https://www.youtube.com/watch?v="+id)
+	saved, _ := s.Db.GetContentByYoutubeID(ctx, yt.ID)
+	if saved != nil {
+		update("cached_summary_found", saved, "")
+		return
+	}
+
+	audioPath := yt.AudioPath
+	if audioPath != "" {
+		exists, _ := s.Mc.ObjectExists(mini.DocumentBucket, audioPath)
+		if exists {
+			update("cached_audio_found", "", "")
+			goto TRANSCRIBE
 		}
 	}
-	return videoLinks, nil
-}
 
-func convertPlaylistConcurrently(ctx context.Context, playlistURL string, m *mini.MinioClient) ([]string, []string, error) {
-	videoLinks, err := getPlaylistVideoLinks(playlistURL)
+	update("downloading_audio", "", "")
+	audioPath, err = s.ExtractAudioToMinio(ctx, link, mini.DocumentBucket)
 	if err != nil {
-		return nil, nil, err
+		update("error", "", "failed to extract audio")
+		return
+	}
+	s.Db.UpdateYoutubeAudioPath(ctx, videoID, audioPath)
+
+TRANSCRIBE:
+	update("transcribing", "", "")
+	content, err := s.TranscribeAudio(audioPath)
+	if err != nil {
+		update("error", "", "transcription failed")
+		return
 	}
 
-	var uploaded []string
-	var videoIDs []string
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4)
-
-	for _, link := range videoLinks {
-		wg.Add(1)
-		go func(l string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			videoID := extractVideoID(l)
-			if videoID == "" {
-				log.Println("Invalid video URL, skipping:", l)
-				return
-			}
-
-			// Check if already exists in MinIO
-			objectPath := "youtube/" + videoID + ".mp3"
-			exists, err := minioObjectExists(ctx, m, mini.DocumentBucket, objectPath)
-			if err != nil {
-				log.Println("Error checking MinIO:", err)
-				return
-			}
-			if exists {
-				mu.Lock()
-				uploaded = append(uploaded, objectPath)
-				videoIDs = append(videoIDs, videoID)
-				mu.Unlock()
-				return
-			}
-
-			// Use unique temp dir per video
-			tmpDir := filepath.Join("tmp", videoID)
-			os.MkdirAll(tmpDir, 0755)
-			defer os.RemoveAll(tmpDir)
-
-			objPath, err := convertYoutubeVideotoAudioWithDir(ctx, l, m, tmpDir)
-			if err != nil {
-				log.Println("Download error:", l, err)
-				return
-			}
-
-			mu.Lock()
-			uploaded = append(uploaded, objPath)
-			videoIDs = append(videoIDs, videoID)
-			mu.Unlock()
-		}(link)
+	update("summarizing", "", "")
+	summary, err := s.AiGenResponse(ctx, content, "youtube")
+	if err != nil {
+		update("error", "", "summarize failed")
+		return
 	}
 
-	wg.Wait()
-	return uploaded, videoIDs, nil
+	update("saving", "", "")
+	sumCon, err := s.Db.CreateContent(ctx, content, summary, nil, &yt.ID)
+	if err != nil {
+		update("error", "", "failed to save content")
+		return
+	}
+
+	update("done", sumCon, "")
 }
 
-func convertYoutubeVideotoAudioWithDir(ctx context.Context, link string, m *mini.MinioClient, tmpDir string) (string, error) {
-	outputPattern := filepath.Join(tmpDir, "%(id)s.%(ext)s")
-	cmd := exec.Command(
+func (s *Service) ExtractAudioToMinio(ctx context.Context, link string, bucket string) (string, error) {
+	timestamp := time.Now().UnixNano()
+	videoPath := filepath.Join(os.TempDir(), fmt.Sprintf("yt_%d.mp4", timestamp))
+	audioPath := filepath.Join(os.TempDir(), fmt.Sprintf("yt_%d.wav", timestamp))
+
+	downloadCmd := exec.Command(
 		"yt-dlp",
-		"-x",
-		"--audio-format", "mp3",
-		"-o", outputPattern,
-		"--extractor-args", "youtube:player_client=default",
+		"-f", "bestaudio",
+		"-o", videoPath,
 		link,
 	)
 
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("yt-dlp error: %w", err)
+	if out, err := downloadCmd.CombinedOutput(); err != nil {
+		os.Remove(videoPath)
+		return "", fmt.Errorf("yt-dlp failed: %v\noutput: %s", err, out)
 	}
 
-	files, err := os.ReadDir(tmpDir)
-	if err != nil || len(files) == 0 {
-		return "", fmt.Errorf("failed to locate downloaded audio")
+	extractCmd := exec.Command(
+		"ffmpeg",
+		"-i", videoPath,
+		"-vn",
+		"-acodec", "pcm_s16le",
+		"-ar", "16000",
+		"-ac", "1",
+		audioPath,
+	)
+
+	if out, err := extractCmd.CombinedOutput(); err != nil {
+		os.Remove(videoPath)
+		os.Remove(audioPath)
+		return "", fmt.Errorf("ffmpeg extract audio failed: %v\noutput: %s", err, out)
 	}
 
-	fileName := files[0].Name()
-	filePath := filepath.Join(tmpDir, fileName)
-	objectPath := "youtube/" + fileName
+	os.Remove(videoPath)
 
-	if err := uploadToMinioIfNotExists(ctx, m, mini.DocumentBucket, objectPath, filePath); err != nil {
-		return "", err
-	}
-
-	return objectPath, nil
-}
-
-func uploadToMinioIfNotExists(ctx context.Context, m *mini.MinioClient, bucket, objectPath, filePath string) error {
-	exists, err := minioObjectExists(ctx, m, bucket, objectPath)
+	file, err := os.Open(audioPath)
 	if err != nil {
-		return err
+		os.Remove(audioPath)
+		return "", fmt.Errorf("failed to open extracted audio: %w", err)
 	}
-	if exists {
-		log.Println("Skipping upload, already exists:", objectPath)
-		return nil
-	}
+	defer file.Close()
 
-	_, err = m.MinClient.FPutObject(
+	fileInfo, _ := file.Stat()
+	objectPath := fmt.Sprintf("youtube_audio/%d.wav", timestamp)
+
+	_, err = s.Mc.MinClient.PutObject(
 		ctx,
 		bucket,
 		objectPath,
-		filePath,
-		minio.PutObjectOptions{ContentType: "audio/mpeg"},
+		file,
+		fileInfo.Size(),
+		minio.PutObjectOptions{
+			ContentType: "audio/wav",
+		},
 	)
 	if err != nil {
-		return fmt.Errorf("minio upload error: %w", err)
+		os.Remove(audioPath)
+		return "", fmt.Errorf("failed to upload to minio: %w", err)
 	}
 
-	log.Println("Uploaded:", objectPath)
-	return nil
-}
+	os.Remove(audioPath)
 
-func minioObjectExists(ctx context.Context, m *mini.MinioClient, bucket, objectPath string) (bool, error) {
-	_, err := m.MinClient.StatObject(ctx, bucket, objectPath, minio.StatObjectOptions{})
-	if err == nil {
-		return true, nil
-	}
-	if minio.ToErrorResponse(err).Code == "NoSuchKey" || strings.Contains(err.Error(), "not found") {
-		return false, nil
-	}
-	return false, err
-}
-
-func extractVideoID(link string) string {
-	u, err := url.Parse(link)
-	if err != nil {
-		return ""
-	}
-	return u.Query().Get("v")
+	return objectPath, nil
 }

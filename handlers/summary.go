@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/lupppig/briefly/db/mini"
 	db "github.com/lupppig/briefly/db/postgres"
@@ -17,6 +16,7 @@ import (
 type BriefHandler struct {
 	Db      *db.PostgresDB
 	Mclient *mini.MinioClient
+	Serv    *service.Service
 }
 
 func (b *BriefHandler) PostYoutube(w http.ResponseWriter, r *http.Request) {
@@ -29,34 +29,25 @@ func (b *BriefHandler) PostYoutube(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := utils.ValidateYouTubeURL(req.Link); err != nil {
-		utils.FerrorResponse(w, http.StatusBadRequest, "invalid YouTube link", err.Error())
-		return
-	}
-
 	jobID := utils.NewJobID()
+	b.Serv.JobManager.CreateJob(jobID)
 
-	go processYoutubeJob(jobID, req.Link, b.Db, b.Mclient)
-	utils.JSONResponse(w, http.StatusAccepted, "youtube processing queued", map[string]string{"job_id": jobID})
+	go b.Serv.ProcessYoutubeJob(jobID, req.Link)
 
+	utils.JSONResponse(w, http.StatusOK, "ok", map[string]string{"job_id": jobID})
 }
 
-func (b *BriefHandler) GetYoutubeJobStatus(w http.ResponseWriter, r *http.Request) {
+func (b *BriefHandler) GetYoutubeJob(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	jobID, err := uuid.Parse(vars["job_id"])
-	if err != nil {
-		utils.FerrorResponse(w, http.StatusBadRequest, "invalid job id", err.Error())
+	jobID := vars["job_id"]
+
+	job := b.Serv.JobManager.GetJob(jobID)
+	if job == nil {
+		utils.FerrorResponse(w, http.StatusNotFound, "job not found", "")
 		return
 	}
 
-	serv := service.Service{Db: b.Db, Mc: b.Mclient}
-	job, err := serv.GetYoutubeStatus(jobID.String())
-	if err != nil {
-		utils.FerrorResponse(w, http.StatusNotFound, "job not found", err.Error())
-		return
-	}
-
-	utils.JSONResponse(w, http.StatusOK, "job status", job)
+	utils.JSONResponse(w, http.StatusOK, "ok", job)
 }
 
 func (b *BriefHandler) PostAudioDoc(w http.ResponseWriter, r *http.Request) {

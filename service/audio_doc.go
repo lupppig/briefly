@@ -6,10 +6,28 @@ import (
 	"mime/multipart"
 	"path/filepath"
 
+	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
 	"github.com/lupppig/briefly/db/mini"
 	db "github.com/lupppig/briefly/db/postgres"
 	"github.com/lupppig/briefly/utils"
 )
+
+type Service struct {
+	Db           *db.PostgresDB
+	Mc           *mini.MinioClient
+	WhisperModel whisper.Model
+	JobManager   *JobManager
+}
+
+var modelsPath string = "models/ggml-base.en.bin"
+
+func NewService(db *db.PostgresDB, m *mini.MinioClient) (*Service, error) {
+	model, err := whisper.New(modelsPath)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{Db: db, Mc: m, WhisperModel: model, JobManager: NewJobManager()}, nil
+}
 
 func (s *Service) AudioDocService(fi multipart.File, fh *multipart.FileHeader) (*db.DocumentAudio, error) {
 	var objKey string

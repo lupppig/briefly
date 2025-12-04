@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -112,73 +111,58 @@ func (p *PostgresDB) GetOrCreateDocument(ctx context.Context, doc DocumentAudio)
 	return &result, nil
 }
 
-func (p *PostgresDB) InsertJobStatus(jobID string, status, playList_link string) error {
-	_, err := p.Conn.Exec(context.Background(),
-		`
-	INSERT INTO youtube_jobs(job_id, link, status)	
-	VALUES($1, $2, $3);
-	`, jobID, playList_link, status)
-	return err
+type SummaryContent struct {
+	Id        string  `json:"id"`
+	Content   string  `json:"content"`
+	AiSummary string  `json:"ai_summary"`
+	FileID    *string `json:"file_id,omitempty"`
+	YoutubeId *string `json:"y_id,omitempty"`
 }
 
-func (p *PostgresDB) UpdateJobStatus(jobID string, status, errMsg string) error {
-	_, err := p.Conn.Exec(context.Background(),
-		`UPDATE youtube_jobs
-         SET status = $1,
-             error = $2,
-             updated_at = NOW()
-         WHERE job_id = $3`,
-		status, errMsg, jobID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update job status: %w", err)
+func (p *PostgresDB) CreateContent(ctx context.Context, content string, aiSummary string, fileID, yID *string) (*SummaryContent, error) {
+	summ := &SummaryContent{
+		Content:   content,
+		AiSummary: aiSummary,
+		FileID:    fileID,
+		YoutubeId: yID,
 	}
-	return nil
-}
 
-func (p *PostgresDB) UpdateJobResult(jobID string, result string, status string) error {
-	_, err := p.Conn.Exec(context.Background(),
-		`UPDATE youtube_jobs
-         SET result = $1,
-             status = $2,
-             updated_at = NOW()
-         WHERE job_id = $3`,
-		result, status, jobID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update job result: %w", err)
-	}
-	return nil
-}
-
-type YoutubeJob struct {
-	ID           string          `json:"job_id"`
-	PlaylistLink string          `json:"playlist_link"`
-	Status       string          `json:"status"`
-	Result       json.RawMessage `json:"result,omitempty"`
-	Error        *string         `json:"error,omitempty"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
-}
-
-func (p *PostgresDB) GetYoutubeJobByID(ctx context.Context, jobID string) (*YoutubeJob, error) {
-	var job YoutubeJob
 	err := p.Conn.QueryRow(ctx, `
-		SELECT job_id, link, status, result, error, created_at, updated_at
-		FROM youtube_jobs
-		WHERE job_id = $1
-	`, jobID).Scan(
-		&job.ID,
-		&job.PlaylistLink,
-		&job.Status,
-		&job.Result,
-		&job.Error,
-		&job.CreatedAt,
-		&job.UpdatedAt,
+		INSERT INTO contents(contents, ai_summary, file_id, youtube_id)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, contents, ai_summary, file_id, youtube_id
+	`, content, aiSummary, fileID, yID).Scan(
+		&summ.Id,
+		&summ.Content,
+		&summ.AiSummary,
+		&summ.FileID,
+		&summ.YoutubeId,
 	)
 
 	if err != nil {
+		return nil, fmt.Errorf("failed to create content: %w", err)
+	}
+
+	return summ, nil
+}
+
+func (p *PostgresDB) GetContentByYoutubeID(ctx context.Context, ytID string) (*SummaryContent, error) {
+	var c SummaryContent
+
+	err := p.Conn.QueryRow(ctx,
+		`SELECT id, contents, ai_summary, file_id, youtube_id 
+		 FROM contents 
+		 WHERE youtube_id = $1 
+		 LIMIT 1`,
+		ytID,
+	).Scan(&c.Id, &c.Content, &c.AiSummary, &c.FileID, &c.YoutubeId)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
 		return nil, err
 	}
-	return &job, nil
+
+	return &c, nil
 }

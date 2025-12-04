@@ -13,6 +13,7 @@ import (
 	"github.com/lupppig/briefly/db/mini"
 	db "github.com/lupppig/briefly/db/postgres"
 	"github.com/lupppig/briefly/handlers"
+	"github.com/lupppig/briefly/service"
 )
 
 func main() {
@@ -42,17 +43,23 @@ func main() {
 		log.Printf("failed to connect to minio %v", err)
 		return
 	}
-	h := handlers.BriefHandler{Db: db, Mclient: mc}
+
+	s, _ := service.NewService(db, mc)
+	if err != nil {
+		log.Println(err.Error())
+		return
+	}
+	h := handlers.BriefHandler{Db: db, Mclient: mc, Serv: s}
 
 	r.HandleFunc("/api/youtube", h.PostYoutube)
 	r.HandleFunc("/api/file", h.PostAudioDoc)
-	r.HandleFunc("/api/youtube/{job_id}", h.GetYoutubeJobStatus)
+	r.HandleFunc("/api/youtube/{job_id}", h.GetYoutubeJob)
 
 	srv := &http.Server{
 		Handler:      r,
 		Addr:         fmt.Sprintf(":%s", port),
-		WriteTimeout: 30 * time.Second * 2,
-		ReadTimeout:  30 * time.Second * 2,
+		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  30 * time.Second,
 	}
 
 	log.Printf("Server port started on: %v", port)

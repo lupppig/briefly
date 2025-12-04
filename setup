@@ -68,3 +68,7 @@ echo "===== Starting Local Services ====="
 start_or_create_postgres
 start_or_create_minio
 echo "===== All Services Ready ====="
+
+
+
+make migrate-up
