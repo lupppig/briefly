@@ -19,6 +19,7 @@ profile.cov
 
 tmp/
 tmp_cache/
+models/
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
