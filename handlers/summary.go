@@ -56,10 +56,11 @@ func (b *BriefHandler) PostAudioDoc(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, MaxUploadSize)
 
 	if err := r.ParseMultipartForm(MaxUploadSize); err != nil {
+		log.Println(err.Error())
 		utils.FerrorResponse(w, http.StatusBadRequest, "file too large", err.Error())
 		return
 	}
-	fi, fh, err := r.FormFile("upload-file")
+	fi, fh, err := r.FormFile("file")
 	if err != nil {
 		log.Println("could not get file", err.Error())
 		utils.InternalServerResponse(w)

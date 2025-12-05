@@ -76,11 +76,19 @@ func (p *PostgresDB) GetOrCreateDocument(ctx context.Context, doc DocumentAudio)
 		file_type, original_name, storage_path, mime_type, size, file_hash, duration_seconds, page_count
 	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 	ON CONFLICT (file_hash) DO UPDATE
-	SET file_type = EXCLUDED.file_type
+	SET 
+		file_type = EXCLUDED.file_type,
+		original_name = EXCLUDED.original_name,
+		storage_path = EXCLUDED.storage_path,
+		mime_type = EXCLUDED.mime_type,
+		size = EXCLUDED.size,
+		duration_seconds = EXCLUDED.duration_seconds,
+		page_count = EXCLUDED.page_count
 	RETURNING id, file_type, original_name, storage_path, mime_type, size, file_hash, duration_seconds, page_count, created_at;
 	`
 
-	row := p.Conn.QueryRow(ctx, query,
+	var result DocumentAudio
+	err := p.Conn.QueryRow(ctx, query,
 		doc.FileType,
 		doc.Name,
 		doc.StoragePath,
@@ -89,10 +97,7 @@ func (p *PostgresDB) GetOrCreateDocument(ctx context.Context, doc DocumentAudio)
 		doc.FileHash,
 		doc.DurationSeconds,
 		doc.PageCount,
-	)
-
-	var result DocumentAudio
-	err := row.Scan(
+	).Scan(
 		&result.ID,
 		&result.FileType,
 		&result.Name,
@@ -155,6 +160,27 @@ func (p *PostgresDB) GetContentByYoutubeID(ctx context.Context, ytID string) (*S
 		 WHERE youtube_id = $1 
 		 LIMIT 1`,
 		ytID,
+	).Scan(&c.Id, &c.Content, &c.AiSummary, &c.FileID, &c.YoutubeId)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &c, nil
+}
+
+func (p *PostgresDB) GetContentByDocID(ctx context.Context, dID string) (*SummaryContent, error) {
+	var c SummaryContent
+
+	err := p.Conn.QueryRow(ctx,
+		`SELECT id, contents, ai_summary, file_id, youtube_id 
+		 FROM contents 
+		 WHERE file_id = $1 
+		 LIMIT 1`,
+		dID,
 	).Scan(&c.Id, &c.Content, &c.AiSummary, &c.FileID, &c.YoutubeId)
 
 	if err != nil {

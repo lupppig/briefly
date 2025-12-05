@@ -15,18 +15,19 @@ MINIO_PORT_CONSOLE=9001
 MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
 MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
 
+WHISPER_DIR="${WHISPER_DIR:-$PWD/whisper.cpp}"
+MODELS_DIR="${PWD}/models"
+MODEL_FILE="ggml-base.en.bin"
+
 container_exists() {
     docker ps -a --format '{{.Names}}' | grep -wq "$1"
 }
 
 start_or_create_postgres() {
     if container_exists "$POSTGRES_CONTAINER"; then
-        echo "[+] Postgres container exists — starting..."
         docker start "$POSTGRES_CONTAINER"
     else
-        echo "[+] Creating Postgres container..."
         docker pull "$POSTGRES_IMAGE"
-
         docker run -d \
             --name "$POSTGRES_CONTAINER" \
             -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
@@ -37,22 +38,16 @@ start_or_create_postgres() {
             "$POSTGRES_IMAGE"
     fi
 
-    # Wait for Postgres to be ready
-    echo "[+] Waiting for Postgres to accept connections..."
     until docker exec -i "$POSTGRES_CONTAINER" pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" > /dev/null 2>&1; do
         sleep 1
     done
-    echo "[+] Postgres is ready!"
 }
 
 start_or_create_minio() {
     if container_exists "$MINIO_CONTAINER"; then
-        echo "[+] MinIO container exists — starting..."
         docker start "$MINIO_CONTAINER"
     else
-        echo "[+] Creating MinIO container..."
         docker pull "$MINIO_IMAGE"
-
         docker run -d \
             --name "$MINIO_CONTAINER" \
             -p "$MINIO_PORT_API":9000 \
@@ -64,11 +59,25 @@ start_or_create_minio() {
     fi
 }
 
-echo "===== Starting Local Services ====="
+install_pdftotext() {
+    if ! command -v pdftotext >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y poppler-utils
+        elif command -v brew >/dev/null 2>&1; then
+            brew install poppler
+        else
+            echo "Unsupported package manager. Install pdftotext manually."
+        fi
+    fi
+}
+
+
+echo ================= running command function ===============
 start_or_create_postgres
 start_or_create_minio
-echo "===== All Services Ready ====="
+install_pdftotext
 
-
-
+echo ========================= finish command function lmaoooooooooooooooooooooooooooooooooooo ==================
 make migrate-up
+
